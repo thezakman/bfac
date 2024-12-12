@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.11
 # coding=utf-8
 # *******************************************************************
 # *** BFAC: Backup File Artifacts Checker ***
@@ -6,10 +6,18 @@
 #   An automated tool that checks for backup artifacts
 #   that may disclose the web-application's source code.
 # * Version:
-#   v1.4
+#   v2.4
 # * Homepage:
+#   https://github.com/TheZakMan/bfac
 #   https://github.com/mazen160/bfac
+#
+# * Changelog:
+#   New arrays and files (12/12/2024)
+#   Added subdomain & main_domain variables (06/12/2024)
+#   New detections added (14/10/2024) 
+#
 # * Author:
+#   TheZakMan <TheZakMan @ ctf-br DOT org>
 #   Mazin Ahmed <Mazin AT MazinAhmed DOT net>
 # *******************************************************************
 
@@ -54,12 +62,19 @@ except Exception:
     pass
 
 
+import hashlib
+
+# Set para armazenar os content-lengths ou hashes já conhecidos
+known_responses = set()
+
+
+
 def version():
     """
     Returns current version.
     """
 
-    version = "1.4"
+    version = "2.4"
     return(version)
 
 
@@ -83,35 +98,39 @@ def logo(enable_colored_logo=True):
         Uncolored Logo.
         """
 
-        logo = 70 * "-" + """"
-\t\t _____ _____ _____ _____
-\t\t| __  |   __|  _  |     |
-\t\t| __ -|   __|     |   --|
-\t\t|_____|__|  |__|__|_____|
-\t\t
-\t   -:::Backup File Artifacts Checker:::-
+        logo = 62 * "─" + """"
+
+\t   ______   ______  ______   ______
+\t  | |  | \ | |     | |  | | | |    
+\t  | |--| < | |---- | |__| | | |    
+\t  |_|__|_/ |_|     |_|  |_| |_|____
+\t
+\t  ╭───────────────────────────────╮
+\t  │ Backup File Artifacts Checker │
+\t  ╰───────────────────────────────╯
 \t\t     Version: """ + str(version()) + """
   Advanced Backup-File Artifacts Testing for Web-Applications
-Author: Mazin Ahmed | <mazin AT mazinahmed DOT net> | @mazen160\
-\n""" + 70 * "-"
+\n""" + 62 * "─"
 
     if enable_colored_logo is True:
+
         """
         Colored Logo.
         """
 
-        logo = 70 * "-" + colorama.Fore.CYAN + """
-\t\t _____ _____ _____ _____
-\t\t| __  |   __|  _  |     |
-\t\t| __ -|   __|     |   --|
-\t\t|_____|__|  |__|__|_____|
-\t\t
-\t   -:::Backup File Artifacts Checker:::-
+        logo = colorama.Fore.GREEN + 62 * "─" + colorama.Style.RESET_ALL + colorama.Style.BRIGHT + """
+\t   ______   ______  ______   ______
+\t  | |  | \ | |     | |  | | | |    
+\t  | |--| < | |---- | |__| | | |    
+\t  |_|__|_/ |_|     |_|  |_| |_|____
+""" + colorama.Style.RESET_ALL + colorama.Fore.CYAN + """ 
+\t  ╭───────────────────────────────╮
+\t  │ Backup File Artifacts Checker │
+\t  ╰───────────────────────────────╯
 \t\t     Version: """ + str(version()) + """
   Advanced Backup-File Artifacts Testing for Web-Applications
-Author: Mazin Ahmed | <mazin AT mazinahmed DOT net> | @mazen160\
 \n"""\
-+ colorama.Style.RESET_ALL + 70 * "-"
++ colorama.Style.RESET_ALL + colorama.Fore.GREEN + 62 * "─"
 
     return(logo)
 
@@ -471,83 +490,635 @@ class RequestsHandler:
         return(initial_status_code, initial_content_length)
 
 
-def url_clean(url):
+def url_clean(u):
     """
     Cleans-up a URL.
     """
+    u = u.split('?')[0]
+    u = u.replace('#', '%23')
+    u = u.replace(' ', '%20')
+    return u
 
-    url = url.split('?')[0]
-    url = url.replace('#', '%23')
-    url = url.replace(' ', '%20')
-    return(url)
 
+from urllib import parse as urlparse
+import os
 
-def url_handler(url):
+def url_clean(u):
     """
-    Parses a URL, and returns output of URL structure.
+    Limpa a URL removendo parâmetros de query, hashtags e espaços.
+    """
+    u = u.split('?')[0]
+    u = u.replace('#', '%23')
+    u = u.replace(' ', '%20')
+    return u
+
+def url_handler(url, commons=None, enable_debug=False):
+    """
+    Analisa uma URL e retorna sua estrutura, incluindo subdomínios e domínio principal.
+
+    Args:
+        url (str): A URL a ser analisada.
+        commons (list, optional): Lista de termos comuns (e.g., ['admin', 'backup']). Defaults to None.
+        enable_debug (bool, optional): Se True, imprime informações de depuração. Defaults to False.
+
+    Returns:
+        dict: Um dicionário contendo as partes analisadas da URL.
     """
 
-    # Assuming URL is: http://example.com/uploads/test.php
+    # Lista de sufixos conhecidos (adicione mais conforme necessário)
+    known_suffixes = [
+        "com.br", "gov.br", "org.br", "net.br", "com", "org", "net", "br", "cl", "edu", "gov", "mil", "int", "arpa"
+    ]
 
-    # Cleaning url
+    # Limpa a URL
     url = url_clean(url)
 
-    # Scheme: http
+    # Adiciona http se não houver
     default_protocol = 'http'
-    if ('://' not in url):
-        url = str(default_protocol) + str('://') + str(url)
-    scheme = urlparse.urlparse(url).scheme
+    if '://' not in url:
+        url = default_protocol + '://' + url
 
-    # Domain: example.com
-    domain = urlparse.urlparse(url).netloc
+    parsed_url = urlparse.urlparse(url)
+    scheme = parsed_url.scheme
 
-    # Site: http://example.com
+    # Normaliza o domínio: minúsculas, remove ponto final e porta
+    domain = parsed_url.netloc.lower().rstrip('.').split(':')[0]
+
+    domain_parts = domain.split('.')
+
+    # Função para encontrar o maior suffix conhecido
+    def find_suffix(parts):
+        # Tenta unir do final para o início, procurando o maior sufixo conhecido
+        for i in range(len(parts), 0, -1):
+            suffix = '.'.join(parts[-i:])
+            if suffix in known_suffixes:
+                return i, suffix
+        return 1, parts[-1]  # fallback caso nada seja encontrado
+
+    # Encontra o maior suffix conhecido
+    i, tld = find_suffix(domain_parts)
+    # i é quantas partes do final formam o TLD
+
+    # main_domain é a parte anterior ao TLD
+    # subdomínios são todas as partes anteriores ao main_domain
+    if len(domain_parts) > i:
+        main_domain = domain_parts[-(i+1)]
+        subdomains_list = domain_parts[:-(i+1)]
+    else:
+        # Caso tenhamos menos partes do que o esperado (domínio muito curto)
+        main_domain = domain_parts[0]
+        subdomains_list = []
+
+    subdomain = '.'.join(subdomains_list)
+
+    # domain_without_tld: combinação dos subdomínios e main_domain
+    if subdomains_list:
+        domain_without_tld = '.'.join(subdomains_list + [main_domain])
+    else:
+        domain_without_tld = main_domain
+
     site = scheme + '://' + domain
-
-    # FilePath: /uploads/test.php
-    file_path = urlparse.urlparse(url).path
-    if (file_path == ''):
+    file_path = parsed_url.path if parsed_url.path else '/'
+    if file_path == '':
         file_path = '/'
 
-    # Filename: test.php
-    try:
-        filename = url.split('/')[-1]
-    except IndexError:
+    # Verifica se o caminho termina com '/', indicando um diretório
+    is_directory = parsed_url.path.endswith('/') or parsed_url.path == '/'
+
+    # Obtém o filename a partir do path
+    if is_directory:
         filename = ''
+        # Define filename_without_ext como domain_without_tld
+        filename_without_ext = domain_without_tld
+        filename_ext = ''
+        file_path_without_ext = file_path.rstrip('/')  # Remove a barra final
+    else:
+        filename = os.path.basename(parsed_url.path)
+        filename_parts = filename.split('.')
+        if len(filename_parts) > 1:
+            filename_ext = '.'.join(filename_parts[1:])
+            filename_without_ext = filename_parts[0]
+            # Remove a extensão do filename para obter file_path_without_ext
+            file_path_without_ext = os.path.splitext(file_path)[0]
+        else:
+            filename_ext = ''
+            filename_without_ext = filename_parts[0] if filename_parts else ''
+            file_path_without_ext = file_path  # Sem extensão para remover
 
-    # File Dir: /uploads/
-    file_dir = file_path.rstrip(filename)
-    if (file_dir == ''):
+    # Obtém o file_dir removendo o filename do path
+    file_dir = os.path.dirname(parsed_url.path)
+    if not file_dir or file_dir == '.':
         file_dir = '/'
+    else:
+        if not file_dir.startswith('/'):
+            file_dir = '/' + file_dir
 
-    # FullPath: http://example.com/uploads/
     full_path = site + file_dir
 
-    # File Extension: php
-    try:
-        filename_ext = filename.split('.')
-        filename_ext.pop(0)
-        filename_ext = '.'.join(filename_ext)
-    except IndexError:
-        filename_ext = ''
+    output = {
+        "scheme": scheme,
+        "domain": domain,
+        "domain_without_tld": domain_without_tld,
+        "site": site,
+        "file_path": file_path,
+        "file_path_without_ext": file_path_without_ext,
+        "filename": filename,
+        "file_dir": file_dir,
+        "full_path": full_path,
+        "filename_ext": filename_ext,
+        "filename_without_ext": filename_without_ext,
+        "tld": tld,
+        "main_domain": main_domain,
+        "subdomains_list": subdomains_list,
+        "subdomain": subdomain
+    }
+    return output
 
-    # File without Extension: test
-    try:
-        filename_without_ext = filename.split('.')[0]
-    except IndexError:
-        filename_without_ext = ''
 
-    output = {"scheme": scheme, "domain": domain,
-              "site": site, "file_path": file_path,
-              "filename": filename, "file_dir": file_dir,
-              "full_path": full_path, "filename_ext": filename_ext,
-              "filename_without_ext": filename_without_ext}
-    return(output)
+commons = [
+    # Backups e versões
+    '_backup',
+    '_bkp',
+    '_old',
+    '_temp',
+    'antigo',
+    'atual',
+    'backup',
+    'bakup',
+    'bck',
+    'bkp',
+    'copia',
+    'copy',
+    'draft',
+    'latest',
+    'new',
+    'novo',
+    'old',
+    'old_files',
+    'rascunho',
+    'revision',
+    'revisao',
+    'teste',
+    'test',
+    'tmp',
+    'velho',
+    'versao',
+    'version',
+    
+    # Administrativo e Segurança
+    'access',
+    'account',
+    'adm',
+    'admin',
+    'admin_cp',
+    'admincp',
+    'admin_password',
+    'adminer',
+    'administrador',
+    'administrator',
+    'auth',
+    'auth_config',
+    'authentication',
+    'authorized_keys',
+    'conexao',
+    'connect',
+    'connection',
+    'control',
+    'controle',
+    'credenciais',
+    'credentials',
+    'creds',
+    'forbidden',
+    'htaccess',
+    'htpasswd',
+    'id_dsa',
+    'id_ecdsa',
+    'id_ed25519',
+    'id_rsa',
+    'jwt',
+    'key',
+    'keys',
+    'known_hosts',
+    'manage',
+    'manager',
+    'master',
+    'otp',
+    'painel',
+    'panel',
+    'passwd',
+    'password',
+    'passwords',
+    'permission',
+    'perms',
+    'private',
+    'restricted',
+    'secret',
+    'secure',
+    'senha',
+    'senhas',
+    'settings',
+    'ssh',
+    'sudo',
+    'token',
+    'tokens',
+    'totp',
+    'users',
+    'usuarios',
+    
+    # Desenvolvimento e APIs
+    'api',
+    'api_key',
+    'api_token',
+    'app',
+    'application',
+    'build',
+    'composer',
+    'console',
+    'core',
+    'deploy',
+    'dev',
+    'development',
+    'dist',
+    'git',
+    'gitlab',
+    'homolog',
+    'homologacao',
+    'htdocs',
+    'info',
+    'localhost',
+    'main',
+    'middleware',
+    'package',
+    'phpinfo',
+    'prod',
+    'production',
+    'projeto',
+    'project',
+    'release',
+    'schema',
+    'source',
+    'src',
+    'staging',
+    'sistema',
+    'swagger',
+    'system',
+    'vagrant',
+    'vendor',
+    
+    # Web e CMS
+    'assets',
+    'blog',
+    'cms',
+    'cpanel',
+    'css',
+    'drupal',
+    'forum',
+    'frontend',
+    'html',
+    'inetpub',
+    'intranet',
+    'javascript',
+    'joomla',
+    'js',
+    'magento',
+    'moodle',
+    'php',
+    'portal',
+    'public',
+    'public_html',
+    'site',
+    'sites',
+    'static',
+    'templates',
+    'themes',
+    'upload',
+    'uploads',
+    'web',
+    'webapp',
+    'website',
+    'wordpress',
+    'wp',
+    'wp-admin',
+    'wp-content',
+    'wp-includes',
+    'wwwroot',
+    
+    # Banco de Dados
+    'banco',
+    'database',
+    'db',
+    'db_backup',
+    'db_config',
+    'db_connection',
+    'db_dump',
+    'dump',
+    'export',
+    'mysqli',
+    'mysql',
+    'mysql_backup',
+    'mysql_dump',
+    'oracle',
+    'pgsql',
+    'phpmyadmin',
+    'postgres',
+    'postgresql',
+    'query',
+    'restore',
+    'sql',
+    'sql_backup',
+    'sql_dump',
+    'sqlserver',
+    'tables',
+    
+    # Configurações
+    'app_config',
+    'cfg',
+    'conf',
+    'config',
+    'configuracao',
+    'configuration',
+    'default',
+    'env',
+    'environment',
+    'globals',
+    'inc',
+    'include',
+    'ini',
+    'inicio',
+    'local',
+    'padrao',
+    'properties',
+    'setup',
+    'vars',
+    'wp-config',
+    
+    # Documentos e Conteúdo
+    'arquivo',
+    'arquivos',
+    'clientes',
+    'clients',
+    'conteudo',
+    'content',
+    'contracts',
+    'contratos',
+    'customer',
+    'data',
+    'dados',
+    'doc',
+    'docs',
+    'documento',
+    'documentos',
+    'documents',
+    'downloads',
+    'employee',
+    'file',
+    'files',
+    'forms',
+    'formulario',
+    'formularios',
+    'funcionarios',
+    'imagem',
+    'imagens',
+    'images',
+    'img',
+    'media',
+    'membros',
+    'members',
+    'midia',
+    'payment',
+    'pagamento',
+    'pdf',
+    'personal',
+    'pictures',
+    'planilha',
+    'planilhas',
+    'relatorio',
+    'relatorios',
+    'reports',
+    'spreadsheet',
+    'staff',
+    
+    # Sistema e Logs
+    'ssh',
+    'access_log',
+    'bashrc',
+    'bash_history',
+    'cgi-bin',
+    'crontab',
+    'debug',
+    'error',
+    'error_log',
+    'errors',
+    'history',
+    'home',
+    'internal',
+    'interno',
+    'log',
+    'logs',
+    'php_error',
+    'private',
+    'privado',
+    'profile',
+    'root',
+    'server_log',
+    'shadow',
+    'shell',
+    'ssh_config',
+    'sshd_config',
+    'sudoers',
+    'sys',
+    'syslog',
+    'trace',
+    'web.config',
+    
+    # Certificados e Chaves
+    'ca',
+    'cert',
+    'certificate',
+    'certificates',
+    'crt',
+    'keystore',
+    'pem',
+    'pfx',
+    'ppk',
+    'private_key',
+    'pub',
+    'public_key',
+    'ssl',
+    
+    # Email
+    'email',
+    'emails',
+    'exchange',
+    'imap',
+    'mail',
+    'mailbox',
+    'newsletter',
+    'outlook',
+    'php_mail',
+    'postfix',
+    'sendmail',
+    'smtp',
+    'webmail',
+    
+    # Temporários
+    'cache',
+    'lixo',
+    'old_site',
+    'recycle',
+    'removed',
+    'temp',
+    'temporario',
+    'temporary',
+    'trash'
+]
 
+def generate_backup_patterns(site, file_path, prefix):
+    """
+    Dada uma base (site, file_path) e um prefixo (main_domain, subdomain, etc.),
+    retorna as variações conhecidas de arquivos de backup.
+    """
+
+    patterns = [
+        '.zip',
+        '.py',
+        '_backup',
+        '_bak',
+        '_old',
+        '_restore',
+        '-bak',
+        '.0',
+        '.1',
+        '.2',
+        '.7z',
+        '.apk',
+        '.ar',
+        '.arc',
+        '.archive',
+        '.bac',
+        '.back',
+        '.backup-old',
+        '.backup',
+        '.backup1',
+        '.backup2',
+        '.bak.sql.bz2',
+        '.bak.sql.gz',
+        '.bak.sql.tar.gz',
+        '.bak.sql',
+        '.bak',
+        '.bakup',
+        '.bck',
+        '.bk',
+        '.bkp',
+        '.bkp~',
+        '.bz2',
+        '.cbz',
+        '.conf',
+        '.copy',
+        '.cs',
+        '.csproj',
+        '.default',
+        '.doc',
+        '.docx',
+        '.ear',
+        '.exe',
+        '.gz',
+        '.inc',
+        '.ini',
+        '.ipa',
+        '.jar',
+        '.java',
+        '.log',
+        '.lst',
+        '.lz',
+        '.lzma',
+        '.md',
+        '.nsx',
+        '.old',
+        '.old~',
+        '.org',
+        '.orig',
+        '.orig~',
+        '.original',
+        '.pdf',
+        '.rar',
+        '.recover',
+        '.recovered',
+        '.restore',
+        '.rollback',
+        '.sav',
+        '.save',
+        '.saved',
+        '.sql.7z',
+        '.sql.bz2',
+        '.sql.gz',
+        '.sql.tar.gz',
+        '.sql.zip',
+        '.sql',
+        '.swo',
+        '.swp',
+        '.swp~',
+        '.tar.7z',
+        '.tar.bz2',
+        '.tar.gz',
+        '.tar.lzma',
+        '.tar.xz',
+        '.tar.z',
+        '.tar',
+        '.tbz2',
+        '.temp',
+        '.temp~',
+        '.tgz',
+        '.tgz~',
+        '.tmp',
+        '.tmp~',
+        '.tpl',
+        '.txt',
+        '.vb',
+        '.war',
+        '.wim',
+        '.xml',
+        '.xz',
+        '.yaml',
+        '.yml',
+        '%23',
+        '~',
+        '~~',
+        '1',
+        '.html',
+        '.htm',
+    ]
+    return [site + file_path + prefix + p for p in patterns]
+
+
+
+def add_domain_variations(backup_list, site, file_path, file_path_without_ext, domain_without_tld, main_domain, subdomain, subdomains_list, commons):
+    """
+    Recebe a lista base (backup_list) e adiciona variações usando main_domain, subdomain e subdomains_list.
+    """
+    # Se commons existir, adiciona as variações
+    for c in commons:
+        backup_list.extend(generate_backup_patterns(site, file_path, c))
+                           
+    # Se main_domain existir, adiciona as variações
+    if main_domain:
+        backup_list.extend(generate_backup_patterns(site, file_path, main_domain))
+        backup_list.extend(generate_backup_patterns(site, file_path, domain_without_tld))
+
+    # Se subdomain existir, adiciona as variações
+    if subdomain:
+        backup_list.extend(generate_backup_patterns(site, file_path, subdomain))
+
+    # Para cada subdomínio individual na lista, adiciona as variações
+    for s in subdomains_list:
+        backup_list.extend(generate_backup_patterns(site, file_path, s))
+
+    return backup_list
 
 def generate_bfa_urls(url,
                       testing_level=5,
-                      dvcs_test=False):
+                      dvcs_test=False,
+                      debug=True):
     """
     Generates BFA testing URLs.
     Returns a list of BFA testing URLs of given URL.
@@ -555,121 +1126,275 @@ def generate_bfa_urls(url,
 
     url_parsed = url_handler(url)
 
-    (scheme, domain, site, file_path, filename,
+    (scheme, domain, site, file_path, file_path_without_ext, filename,
      file_dir, full_path, filename_ext,
-     filename_without_ext) = (url_parsed["scheme"],
-                              url_parsed["domain"],
-                              url_parsed["site"],
-                              url_parsed["file_path"],
-                              url_parsed["filename"],
-                              url_parsed["file_dir"],
-                              url_parsed["full_path"],
-                              url_parsed["filename_ext"],
-                              url_parsed["filename_without_ext"])
+     filename_without_ext, subdomain, subdomains_list, main_domain, domain_without_tld, tld) = (url_parsed["scheme"],
+                                                      url_parsed["domain"],
+                                                      url_parsed["site"],
+                                                      url_parsed["file_path"],
+                                                      url_parsed["file_path_without_ext"],
+                                                      url_parsed["filename"],
+                                                      url_parsed["file_dir"],
+                                                      url_parsed["full_path"],
+                                                      url_parsed["filename_ext"],
+                                                      url_parsed["filename_without_ext"],
+                                                      url_parsed["subdomain"],
+                                                      url_parsed["subdomains_list"],
+                                                      url_parsed["main_domain"],
+                                                      url_parsed["domain_without_tld"],
+                                                      url_parsed["tld"],)
+
 
     # LEVEL 1
     backup_testing_level1 = [
-        site + file_path + '~',
-        site + file_path + '%23',
-        site + file_path + '.save',
-        site + file_path + '.swp',
-        site + file_path + '.swo',
         full_path + '%23' + filename + '%23',
-        site + file_path + '.bak'
+        full_path + filename + '.draft',
+        site + file_path + '.backup',
+        site + file_path + '.bak',
+        site + file_path + '.old',
+        site + file_path + '.orig',
+        site + file_path + '.orig~',
+        site + file_path + '.recover',
+        site + file_path + '.restore',
+        site + file_path + '.save',
+        site + file_path + '.swo',
+        site + file_path + '.swp',
+        site + file_path + '.swp~',
+        site + file_path + '.temp~',
+        site + file_path + '.tmp',
+        site + file_path + '%23',
+        site + file_path + '~',
+
+        site + file_path_without_ext + '.backup',
+        site + file_path_without_ext + '.bak',
+        site + file_path_without_ext + '.old',
+        site + file_path_without_ext + '.orig',
+        site + file_path_without_ext + '.orig~',
+        site + file_path_without_ext + '.recover',
+        site + file_path_without_ext + '.restore',
+        site + file_path_without_ext + '.save',
+        site + file_path_without_ext + '.swo',
+        site + file_path_without_ext + '.swp',
+        site + file_path_without_ext + '.swp~',
+        site + file_path_without_ext + '.temp~',
+        site + file_path_without_ext + '.tmp',
+        site + file_path_without_ext + '%23',
+        site + file_path_without_ext + '~',
+
+        #django-secret-key
+        full_path + '/hse/settings.py', 
+        site + ':5859/hse/settings.py',
+        "http://" + domain + ':5859/hse/settings.py',
+        "https://" + domain + ':5859/hse/settings.py',
+
+        full_path + subdomain + '.zip',
+        full_path + subdomain + '.rar',
+        full_path + subdomain + '.7z',
+        full_path + subdomain + '.gz',
+        full_path + subdomain + '.tar',
+        full_path + subdomain + '.tar.gz',
+        full_path + subdomain + '.apk',
+        full_path + subdomain + '.ipa',
+        full_path + subdomain + '.md',
+        full_path + subdomain + '_backup' + filename_ext,
+        full_path + subdomain + '_backup',
+        full_path + subdomain + '_bak' + filename_ext,
+        full_path + subdomain + '_bak',
+        full_path + subdomain + '_old' + filename_ext,
+        full_path + subdomain + '_old',
+        full_path + subdomain + '-backup.' + filename_ext,
+        full_path + subdomain + '-bkp.' + filename_ext,
+        full_path + subdomain + '.backup-old',
+        full_path + subdomain + '.bak.sql.bz2',
+        full_path + subdomain + '.bak.sql.gz',
+        full_path + subdomain + '.bak.sql.tar.gz',
+        full_path + subdomain + '.bak.sql',
+        full_path + subdomain + '.ipa',
+        full_path + subdomain + '.rar',
+        full_path + subdomain + '.sql.gz',
+        full_path + subdomain + '.tar.7z',
+        full_path + subdomain + '.tar.bz2',
+        full_path + subdomain + '.tar.gz',
+        full_path + subdomain + '.tar.lzma',
+        full_path + subdomain + '.tar.xz',
+        full_path + subdomain + '.tar',
+        full_path + subdomain + '.tbz2',
+        full_path + subdomain + '.tgz',
+        full_path + subdomain + '.tgz~',
+        full_path + subdomain + '.zip',
+        full_path + subdomain + '.py',
+
+        full_path + domain + '.zip',
+        full_path + domain + '.rar',
+        full_path + domain + '.7z',
+        full_path + domain + '.gz',
+        full_path + domain + '.tar',
+        full_path + domain + '.tar.gz',
+        full_path + domain + '.apk',
+        full_path + domain + '.ipa',
+        full_path + domain + '.md',
+        full_path + domain + '_backup' + filename_ext,
+        full_path + domain + '_backup',
+        full_path + domain + '_bak' + filename_ext,
+        full_path + domain + '_bak',
+        full_path + domain + '_old' + filename_ext,
+        full_path + domain + '_old',
+        full_path + 'old_' + domain,
+        full_path + 'temp_' + domain,
+        full_path + 'bkp_' + domain,
+        full_path + 'copy_' + domain,
+        full_path + domain + '-backup.' + filename_ext,
+        full_path + domain + '-bkp.' + filename_ext,
+        full_path + domain + '.backup-old',
+        full_path + domain + '.bak.sql.bz2',
+        full_path + domain + '.bak.sql.gz',
+        full_path + domain + '.bak.sql.tar.gz',
+        full_path + domain + '.bak.sql',
+        full_path + domain + '.ipa',
+        full_path + domain + '.rar',
+        full_path + domain + '.sql.gz',
+        full_path + domain + '.tar.7z',
+        full_path + domain + '.tar.bz2',
+        full_path + domain + '.tar.gz',
+        full_path + domain + '.tar.lzma',
+        full_path + domain + '.tar.xz',
+        full_path + domain + '.tar',
+        full_path + domain + '.tbz2',
+        full_path + domain + '.tgz',
+        full_path + domain + '.tgz~',
+        full_path + domain + '.zip',
+        full_path + domain + '.py',
+        full_path + domain + '.idea',
+        full_path + domain + '.git',
+        full_path + domain + 'web.release.config',
+        full_path + domain + 'web.config',
+        full_path + domain + 'db.sqlite3',
+        full_path + domain + 'i18n',
+        full_path + domain + 'i18n_pt_BR.properties',
+        full_path + domain + '.pyenv',
+        full_path + domain + '__init__.py',
+        
+        full_path + domain,
+        full_path + subdomain,
     ]
+   
+    for sub in subdomains_list:
+        full_path + sub
+    backup_testing_level1 = add_domain_variations(backup_testing_level1, site, file_path, file_path_without_ext, domain_without_tld, main_domain, subdomain, subdomains_list, commons)
 
     # LEVEL 2
     backup_testing_level2 = [
-        site + file_path + '1',
-        site + file_path + 'bak',
-        site + file_path + 'inc',
-        site + file_path + 'old',
-        site + file_path + '_',
-        site + file_path + '~~',
-        site + file_path + '_backup',
-        site + file_path + '_bak',
-        site + file_path + '-bak',
-        site + file_path + '.bk',
-        site + file_path + '.bkp',
-        full_path + filename + '.bac',
-        site + file_path + '.old',
-        site + file_path + '_old',
-        site + file_path + '.copy',
-        site + file_path + '.original',
-        site + file_path + '.orig',
-        site + file_path + '.org',
-        site + file_path + '.txt',
-        site + file_path + '.default',
-        full_path + filename + '.tpl',
-        full_path + filename + '.tmp',
-        full_path + filename + '.temp',
-        full_path + '.' + filename + ".swp",
-        full_path + '.' + filename + ".swo",
-        full_path + '_' + filename + '.swp',
-        full_path + '_' + filename + '.swo',
-        full_path + filename + '.sav',
-        full_path + filename + '.conf',
-        full_path + filename_without_ext +
+        '%20-%20Copy.' + filename_ext,
         '%20%28copy%29.' + filename_ext,
-        full_path + 'Copy%20of%20' + filename,
-        full_path + 'copy%20of%20' + filename,
+        full_path + '_' + filename + '.swo',
+        full_path + '_' + filename + '.swp',
+        full_path + '.' + filename + ".swo",
+        full_path + '.' + filename + ".swp",
+        full_path + 'bkp_' + filename,
         full_path + 'Copy_' + filename,
-        full_path + 'Copy%20' + filename,
-        full_path + 'Copy_of_' + filename,
         full_path + 'Copy_(1)_of_' + filename,
         full_path + 'Copy_(2)_of_' + filename,
-        full_path + filename_without_ext +
-        '%20-%20Copy.' + filename_ext,
-        full_path + filename_without_ext + '%20copy.' + filename_ext
+        full_path + 'Copy_of_' + filename,
+        full_path + 'Copy%20' + filename,
+        full_path + 'copy%20of%20' + filename,
+        full_path + 'Copy%20of%20' + filename,
+
+        full_path + 'bkp_' + filename,
+        full_path + 'Copy_' + filename,
+        full_path + 'Copy_(1)_of_' + filename,
+        full_path + 'Copy_(2)_of_' + filename,
+        full_path + 'Copy_of_' + filename,
+        full_path + 'Copy%20' + filename,
+        full_path + 'copy%20of%20' + filename,
+        full_path + 'Copy%20of%20' + filename,
+
+        full_path + filename + '.bac',
+        full_path + filename + '.backup',
+        full_path + filename + '.backup1',
+        full_path + filename + '.backup2',
+        full_path + filename + '.bkp~',
+        full_path + filename + '.conf',
+        full_path + filename + '.rollback',
+        full_path + filename + '.sav',
+        full_path + filename + '.temp',
+        full_path + filename + '.tmp',
+        full_path + filename + '.tpl',
+
+        full_path + filename_without_ext + '_bkp' + filename_ext,
+        full_path + filename_without_ext + '%20copy.' + filename_ext,
+        full_path + filename_without_ext + filename_ext + '-dev',
+
+        site + file_path + '_',
+        site + file_path + '_backup',
+        site + file_path + '_bak',
+        site + file_path + '_old',
+        site + file_path + '_restore',
+        site + file_path + '-bak',
+        site + file_path + '.backup1',
+        site + file_path + '.backup2',
+        site + file_path + '.bk',
+        site + file_path + '.bkp',
+        site + file_path + '.copy',
+        site + file_path + '.default',
+        site + file_path + '.org',
+        site + file_path + '.orig',
+        site + file_path + '.original',
+        site + file_path + '.txt',
+        site + file_path + '~~',
+        site + file_path + '.1',
+        site + file_path + '.bak',
+        site + file_path + '.inc',
+        site + file_path + '.old',
+        
+        site + file_path_without_ext + '_',
+        site + file_path_without_ext + '_backup',
+        site + file_path_without_ext + '_bak',
+        site + file_path_without_ext + '_old',
+        site + file_path_without_ext + '_restore',
+        site + file_path_without_ext + '-bak',
+        site + file_path_without_ext + '.backup1',
+        site + file_path_without_ext + '.backup2',
+        site + file_path_without_ext + '.bk',
+        site + file_path_without_ext + '.bkp',
+        site + file_path_without_ext + '.copy',
+        site + file_path_without_ext + '.default',
+        site + file_path_without_ext + '.org',
+        site + file_path_without_ext + '.orig',
+        site + file_path_without_ext + '.original',
+        site + file_path_without_ext + '.txt',
+        site + file_path_without_ext + '~~',
+        site + file_path_without_ext + '.1',
+        site + file_path_without_ext + '.bak',
+        site + file_path_without_ext + '.inc',
+        site + file_path_without_ext + '.old',
+        
     ]
+
+    backup_testing_level2 = add_domain_variations(backup_testing_level1, site, file_path, file_path_without_ext, domain_without_tld, main_domain, subdomain, subdomains_list, commons)
+
 
     # LEVEL 3
     backup_testing_level3 = [
-        full_path + filename_without_ext + '.txt',
-        full_path + filename_without_ext + '.backup',
-        full_path + filename_without_ext + '.bak',
-        full_path + filename_without_ext + '.bak1',
-        full_path + filename_without_ext + '.bakup',
-        full_path + filename_without_ext + '.bakup1',
-        full_path + filename_without_ext + '.bkp',
-        full_path + filename_without_ext + '.save',
-        full_path + filename_without_ext + '.old',
-        full_path + filename_without_ext + '.orig',
-        full_path + filename_without_ext + '.original',
-        full_path + filename_without_ext + '.sql',
-        full_path + filename_without_ext + '.war',
-        full_path + filename_without_ext + '.wim',
-        full_path + filename_without_ext + '.xz',
-        site + file_path + '%00',
-        site + file_path + '%01',
-        full_path + '~' + filename,
-        full_path + filename_without_ext + '.tpl',
-        full_path + filename_without_ext + '.tmp',
-        full_path + filename_without_ext + '.temp',
-        full_path + filename + '.saved',
-        full_path + filename + '.back',
-        full_path + filename + '.backup',
-        full_path + filename + '.bck',
-        full_path + filename + '.bakup',
-        full_path + filename_without_ext + '.saved',
-        full_path + filename_without_ext + '.bac',
-        full_path + filename_without_ext + '.back',
-        full_path + filename_without_ext + '.bck',
-        full_path + filename_without_ext + '.bakup',
         full_path + '_' + filename,
+        full_path + '.~' + filename,
+        full_path + '.~lock.' + filename + '%23',
         full_path + '%20' + filename,
-        full_path + filename + '.nsx',
-        full_path + filename + '.cs',
-        full_path + filename + '.csproj',
-        full_path + filename + '.vb',
+        full_path + '~' + filename,
+        full_path + '~%24' + filename,
         full_path + filename + '.0',
         full_path + filename + '.1',
         full_path + filename + '.2',
         full_path + filename + '.7z',
         full_path + filename + '.ar',
         full_path + filename + '.arc',
+        full_path + filename + '.back',
+        full_path + filename + '.backup',
+        full_path + filename + '.bakup',
+        full_path + filename + '.bck',
         full_path + filename + '.bz2',
         full_path + filename + '.cbz',
+        full_path + filename + '.cs',
+        full_path + filename + '.csproj',
         full_path + filename + '.ear',
         full_path + filename + '.exe',
         full_path + filename + '.gz',
@@ -677,15 +1402,25 @@ def generate_bfa_urls(url,
         full_path + filename + '.jar',
         full_path + filename + '.lst',
         full_path + filename + '.lzma',
+        full_path + filename + '.nsx',
+        full_path + filename + '.saved',
+        full_path + filename + '.vb',
         full_path + filename + '.war',
         full_path + filename + '.wim',
         full_path + filename + '.xz',
-        full_path + '.~lock.' + filename + '%23',
-        full_path + '.~' + filename,
-        full_path + '~%24' + filename,
+        
         full_path + filename_without_ext + '.1',
         full_path + filename_without_ext + '.7z',
         full_path + filename_without_ext + '.ar',
+        full_path + filename_without_ext + '.bac',
+        full_path + filename_without_ext + '.back',
+        full_path + filename_without_ext + '.backup',
+        full_path + filename_without_ext + '.bak',
+        full_path + filename_without_ext + '.bak1',
+        full_path + filename_without_ext + '.bakup',
+        full_path + filename_without_ext + '.bakup1',
+        full_path + filename_without_ext + '.bck',
+        full_path + filename_without_ext + '.bkp',
         full_path + filename_without_ext + '.bz2',
         full_path + filename_without_ext + '.cbz',
         full_path + filename_without_ext + '.ear',
@@ -695,101 +1430,194 @@ def generate_bfa_urls(url,
         full_path + filename_without_ext + '.include',
         full_path + filename_without_ext + '.jar',
         full_path + filename_without_ext + '.lzma',
+        full_path + filename_without_ext + '.old',
+        full_path + filename_without_ext + '.orig',
+        full_path + filename_without_ext + '.original',
+        full_path + filename_without_ext + '.save',
+        full_path + filename_without_ext + '.saved',
+        full_path + filename_without_ext + '.sql',
+        full_path + filename_without_ext + '.temp',
+        full_path + filename_without_ext + '.tmp',
+        full_path + filename_without_ext + '.tpl',
+        full_path + filename_without_ext + '.txt',
+        full_path + filename_without_ext + '.war',
+        full_path + filename_without_ext + '.wim',
+        full_path + filename_without_ext + '.xz',
+        site + file_path + '%00',
+        site + file_path + '%01',
+        full_path + filename + '.log',
+        full_path + filename_without_ext + '.log',
+        full_path + filename_without_ext + '.old~',
+        full_path + filename_without_ext + '.recovered',
+        full_path + filename_without_ext + '.restore',
+        full_path + filename_without_ext + '.tmp~',
+        site + file_path + '.log',
+        site + file_path + '.old~',
+        site + domain + '.py'
     ]
+
+    backup_testing_level3 = add_domain_variations(backup_testing_level1, site, file_path, file_path_without_ext, domain_without_tld, main_domain, subdomain, subdomains_list, commons)
 
     # LEVEL 4
     backup_testing_level4 = [
-        site + file_path + '.tar',
-        site + file_path + '.rar',
-        site + file_path + '.zip',
         full_path + '~' + filename_without_ext + '.tmp',
-        site + file_path + '.tar.7z',
-        site + file_path + '.tar.bz2',
-        site + file_path + '.tar.gz',
-        site + file_path + '.tar.lzma',
-        site + file_path + '.tar.xz',
-        full_path + 'backup-' + filename,
         full_path + 'backup_' + filename,
-        full_path + 'bak-' + filename,
+        full_path + 'backup-' + filename,
         full_path + 'bak_' + filename,
+        full_path + 'bak-' + filename,
+        full_path + filename + '.apk',
+        full_path + filename + '.ipa',
+        full_path + filename + '.md',
+        full_path + filename_without_ext + '_backup' + filename_ext,
+        full_path + filename_without_ext + '_backup',
+        full_path + filename_without_ext + '_bak' + filename_ext,
+        full_path + filename_without_ext + '_bak',
+        full_path + filename_without_ext + '_old' + filename_ext,
+        full_path + filename_without_ext + '_old',
         full_path + filename_without_ext + '-backup.' + filename_ext,
         full_path + filename_without_ext + '-bkp.' + filename_ext,
-        full_path + filename_without_ext + '.tar',
+        full_path + filename_without_ext + '.backup-old',
+        full_path + filename_without_ext + '.bak.sql.bz2',
+        full_path + filename_without_ext + '.bak.sql.gz',
+        full_path + filename_without_ext + '.bak.sql.tar.gz',
+        full_path + filename_without_ext + '.bak.sql',
+        full_path + filename_without_ext + '.ipa',
         full_path + filename_without_ext + '.rar',
-        full_path + filename_without_ext + '.zip',
+        full_path + filename_without_ext + '.sql.gz',
         full_path + filename_without_ext + '.tar.7z',
         full_path + filename_without_ext + '.tar.bz2',
         full_path + filename_without_ext + '.tar.gz',
         full_path + filename_without_ext + '.tar.lzma',
         full_path + filename_without_ext + '.tar.xz',
-        full_path + filename_without_ext + '.sql.gz',
-        full_path + filename_without_ext + '.bak.sql',
-        full_path + filename_without_ext + '.bak.sql.gz',
-        full_path + filename_without_ext + '.bak.sql.bz2',
-        full_path + filename_without_ext + '.bak.sql.tar.gz',
-        site + file_path + '.',  # CVE-2017-12616
-        site + file_path + '::$DATA',  # CVE-2017-12616
-        full_path + filename_without_ext + '1',
+        full_path + filename_without_ext + '.tar',
+        full_path + filename_without_ext + '.tbz2',
+        full_path + filename_without_ext + '.tgz',
+        full_path + filename_without_ext + '.tgz~',
+        full_path + filename_without_ext + '.zip',
         full_path + filename_without_ext + '1.' + filename_ext,
-        full_path + filename_without_ext + '_backup',
-        full_path + filename_without_ext + '_backup' + filename_ext,
-        full_path + filename_without_ext + '_bak',
-        full_path + filename_without_ext + '_bak' + filename_ext,
-        full_path + filename_without_ext + '_old',
-        full_path + filename_without_ext + '_old' + filename_ext,
+        full_path + filename_without_ext + '1',
         full_path + filename_without_ext + 'bak',
         full_path + filename_without_ext + 'inc',
         full_path + filename_without_ext + 'old',
+        full_path + '::$DATA',  # CVE-2017-12616
+        full_path + '.',  # CVE-2017-12616
+        full_path + filename_without_ext + '::$DATA',  # CVE-2017-12616
+        # New detections added (12/10/2024)
+        full_path + filename_without_ext + '.apk',
+        full_path + filename_without_ext + '.archive',
+        full_path + filename_without_ext + '.gz',
+        full_path + filename_without_ext + '.jar',
+        full_path + filename_without_ext + '.java',
+        full_path + filename_without_ext + '.lz',
+        full_path + filename_without_ext + '.md',
+        full_path + filename_without_ext + '.rar',
+        full_path + filename_without_ext + '.sql.7z',
+        full_path + filename_without_ext + '.sql.gz',
+        full_path + filename_without_ext + '.sql.zip',
+        full_path + filename_without_ext + '.tar.7z',
+        full_path + filename_without_ext + '.tar.bz2',
+        full_path + filename_without_ext + '.tar.gz',
+        full_path + filename_without_ext + '.tar.lzma',
+        full_path + filename_without_ext + '.tar.xz',
+        full_path + filename_without_ext + '.tar.z',
+        full_path + filename_without_ext + '.tar',
+        full_path + filename_without_ext + '.tbz2',
+        full_path + filename_without_ext + '.tgz',
+        full_path + filename_without_ext + '.tgz~',
+        full_path + filename_without_ext + '.war',
+
+
     ]
 
     # LEVEL 5
     backup_testing_level5 = [
-        site + '/.git/HEAD',
-        full_path + '.git/HEAD',
-        site + '/.git/index',
-        full_path + '.git/index',
-        site + '/.git/config',
-        full_path + '.git/config',
-        site + '/.gitignore',
-        full_path + '.gitignore',
-        site + '/.git-credentials',
-        full_path + '.git-credentials',
-        site + '/.bzr/README',
-        full_path + '.bzr/README',
-        site + '/.bzr/checkout/dirstate',
+        # New detections added (12/10/2024)
         full_path + '.bzr/checkout/dirstate',
-        site + '/.hg/requires',
-        full_path + '.hg/requires',
-        site + '/.hg/store/fncache',
-        full_path + '.hg/store/fncache',
-        site + '/.svn/entries',
-        full_path + '.svn/entries',
-        site + '/.svn/all-wcprops',
-        full_path + '.svn/all-wcprops',
-        full_path + '.svn/wc.db',
-        site + '/.svn/wc.db',
-        site + '/.svnignore',
-        full_path + '.svnignore',
-        site + '/CVS/Entries',
-        full_path + 'CVS/Entries',
-        site + '/.cvsignore',
+        full_path + '.bzr/README',
         full_path + '.cvsignore',
-        site + '/.idea/misc.xml',
-        full_path + '.idea/misc.xml',
-        site + '/.idea/workspace.xml',
-        full_path + '.idea/workspace.xml',
-        site + '/.DS_Store',
         full_path + '.DS_Store',
-        site + '/composer.lock',
-        full_path + 'composer.lock'
+        full_path + '.fossil-settings',
+        full_path + '.fossil',
+        full_path + '.git-credentials',
+        full_path + '.git/config',
+        full_path + '.git/HEAD',
+        full_path + '.git/index',
+        full_path + '.gitignore',
+        full_path + '.gitmodules',
+        full_path + '.hg/hgrc',
+        full_path + '.hg/requires',
+        full_path + '.hg/store/fncache',
+        full_path + '.idea/misc.xml',
+        full_path + '.idea/workspace.xml',
+        full_path + '.npmrc',
+        full_path + '.svn/all-wcprops',
+        full_path + '.svn/authz',
+        full_path + '.svn/entries',
+        full_path + '.svn/wc.db',
+        full_path + '.svnignore',
+        full_path + '.vscode/settings.json',
+        full_path + 'composer.lock',
+        full_path + 'CVS/Entries',
+        full_path + 'Thumbs.db',
+        # New detections added 07/12/2024)
+        full_path + 'id_rsa',
+        full_path + 'id_rsa.pub',
+        full_path + '.env',
+        full_path + 'Makefile',
+        full_path + 'docker-compose.override.yml',
+        full_path + 'docker-compose.prod.yml',
+        full_path + 'docker-compose.dev.yml',
+        full_path + '.vscode/sftp.json',
+        full_path + '.vscode',
+        full_path + 'sftp.json',
+        full_path + 'phpinfo.php',
+        full_path + 'swagger.yaml',
+        full_path + 'openapi.yaml',
+        full_path + 'appsettings.json',
+        full_path + 'config.xml',
+        full_path + 'settings.xml',
+        full_path + 'security.yaml',
+        full_path + 'application.yml',
+        full_path + 'Dockerfile',
+        full_path + 'docker-entrypoint.sh',
+        full_path + 'docker-compose.yml',
+        full_path + 'bitbucket-pipelines.yml',
+        full_path + 'access.log',
+        full_path + 'error.log',
+        full_path + 'web.config',
+        full_path + 'web_old.config'
     ]
 
-    testing_level = str(testing_level)
+    if debug:
+        print("Scheme:",scheme)
+        print("Site:",site)
+        print("Full_path:",full_path)
+        print("File_path:",file_path)
+        print("File_path_without_ext:",file_path_without_ext)
+        print("File_dir:",file_dir)
+        print("Filename:",filename)
+        print("Filename_ext:",filename_ext)
+        print("Filename_without_ext:",filename_without_ext)
+        print("TLD:", tld)
+        print("Domain:", domain)
+        print("Domain_without_tld:", domain_without_tld)
+        print("Main Domain:", main_domain)
+        print("Subdomains List:", subdomains_list)
+        print("Subdomain (string):", subdomain + "\n")
+        print("Commons:",len(commons), "\n")
+
+    backup_testing_level4 = add_domain_variations(backup_testing_level1, site, file_path, file_path_without_ext, domain_without_tld, main_domain, subdomain, subdomains_list, commons)
+
+    #print(backup_testing_level4)
+
+    #testing_level = str(testing_level)
+    testing_level = str(testing_level) if testing_level else '5'
 
     available_levels = ['1', '2', '3', '4', '5']
     # Check is requested testing_level is within available levels.
     # If not within available levels, choose highest level.
     if (testing_level not in available_levels):
+        print(f"Invalid level selected: {testing_level}. Defaulting to level 5.")
         testing_level = '5'
 
     if (testing_level == '1'):
@@ -819,6 +1647,8 @@ def generate_bfa_urls(url,
     backup_testing_checks = random.sample(backup_testing_checks,
                                           len(backup_testing_checks)
                                           )
+    
+
     return(backup_testing_checks)
 
 
@@ -988,6 +1818,7 @@ def request_and_verify_response(url,
           and determines whether a file exists on the server or not.
     """
 
+    # Make the request to the URL
     resp = RequestsHandler().requester(
         url,
         proxy=proxy,
@@ -1002,6 +1833,20 @@ def request_and_verify_response(url,
         timeout=timeout,
         notext=notext)
 
+    # Ensure the response body is what we're hashing (instead of the status code)
+    response_body = resp[1] if isinstance(resp[1], bytes) else str(resp[1])
+
+    # Generate a hash of the response body/content
+    content_hash = hashlib.md5(response_body.encode()).hexdigest()
+
+    # Check if the Content-Length or the hash has been seen before
+    if content_hash in known_responses:
+        return False, resp
+
+    # If the Content-Length or hash is new, add it to the set of known responses
+    known_responses.add(content_hash)
+
+    # Verify if the file exists based on the status code and/or Content-Length
     file_exists = VerifyResponse().request_check(
         use_content_length_checks=use_content_length_checks,
         use_status_code_checks=use_status_code_checks,
@@ -1012,7 +1857,7 @@ def request_and_verify_response(url,
         response_status_code=resp[0],
         excluded_status_codes=excluded_status_codes)
 
-    # Remove if exists on excluded status-codes
+    # Remove if it exists in excluded status codes
     for excluded_status_code in excluded_status_codes:
         if str(resp[0]) == str(excluded_status_code):
             file_exists = False
@@ -1037,7 +1882,8 @@ def request_and_verify_response(url,
                                   enable_debug=True,
                                   notext=False)
 
-    return(file_exists, resp)
+    return file_exists, resp
+
 
 
 class OutputResults:
@@ -1451,7 +2297,7 @@ def main():
         exit(0)
 
     if ('--issue' in sys.argv):
-        webbrowser.open('https://github.com/mazen160/bfac/issues/new')
+        webbrowser.open('https://github.com/thezakman/bfac/issues/new')
         print(symbols.info + ' Opening GitHub repo.')
         exit(0)
 
