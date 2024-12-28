@@ -6,13 +6,13 @@
 #   An automated tool that checks for backup artifacts
 #   that may disclose the web-application's source code.
 # * Version:
-#   v2.4
+#   v2.3
 # * Homepage:
 #   https://github.com/TheZakMan/bfac
 #   https://github.com/mazen160/bfac
 #
 # * Changelog:
-#   New arrays and files (12/12/2024)
+#   New arrays and files (09/12/2024)
 #   Added subdomain & main_domain variables (06/12/2024)
 #   New detections added (14/10/2024) 
 #
@@ -33,6 +33,7 @@ import platform
 import threading
 import webbrowser
 import colorama
+import keyboard
 try:
     import Queue as queue
 except ImportError:
@@ -74,7 +75,7 @@ def version():
     Returns current version.
     """
 
-    version = "2.4"
+    version = "2.3"
     return(version)
 
 
@@ -766,6 +767,8 @@ commons = [
     'vendor',
     
     # Web e CMS
+    'backend',
+    'backend-credentials'
     'assets',
     'blog',
     'cms',
@@ -956,7 +959,7 @@ commons = [
     'newsletter',
     'outlook',
     'php_mail',
-    'postfix',
+    #'postfix',
     'sendmail',
     'smtp',
     'webmail',
@@ -981,22 +984,8 @@ def generate_backup_patterns(site, file_path, prefix):
 
     patterns = [
         '.zip',
-        '.py',
-        '_backup',
-        '_bak',
-        '_old',
-        '_restore',
-        '-bak',
-        '.0',
-        '.1',
-        '.2',
         '.7z',
         '.apk',
-        '.ar',
-        '.arc',
-        '.archive',
-        '.bac',
-        '.back',
         '.backup-old',
         '.backup',
         '.backup1',
@@ -1007,48 +996,30 @@ def generate_backup_patterns(site, file_path, prefix):
         '.bak.sql',
         '.bak',
         '.bakup',
-        '.bck',
-        '.bk',
-        '.bkp',
-        '.bkp~',
         '.bz2',
-        '.cbz',
         '.conf',
         '.copy',
         '.cs',
         '.csproj',
-        '.default',
         '.doc',
         '.docx',
-        '.ear',
         '.exe',
         '.gz',
-        '.inc',
+        '.htm',
+        '.html',
         '.ini',
         '.ipa',
         '.jar',
         '.java',
         '.log',
-        '.lst',
-        '.lz',
-        '.lzma',
         '.md',
-        '.nsx',
         '.old',
-        '.old~',
-        '.org',
-        '.orig',
-        '.orig~',
-        '.original',
         '.pdf',
+        '.py',
         '.rar',
         '.recover',
         '.recovered',
         '.restore',
-        '.rollback',
-        '.sav',
-        '.save',
-        '.saved',
         '.sql.7z',
         '.sql.bz2',
         '.sql.gz',
@@ -1066,15 +1037,9 @@ def generate_backup_patterns(site, file_path, prefix):
         '.tar.z',
         '.tar',
         '.tbz2',
-        '.temp',
-        '.temp~',
         '.tgz',
-        '.tgz~',
-        '.tmp',
-        '.tmp~',
-        '.tpl',
         '.txt',
-        '.vb',
+        #'.vb',
         '.war',
         '.wim',
         '.xml',
@@ -1082,11 +1047,40 @@ def generate_backup_patterns(site, file_path, prefix):
         '.yaml',
         '.yml',
         '%23',
-        '~',
-        '~~',
         '1',
-        '.html',
-        '.htm',
+        #'_backup',
+        #'_bak',
+        #'_restore',
+        #'-bak',
+        #'.0',
+        #'.1',
+        #'.2',
+        #'.ar',
+        #'.arc',
+        #'.archive',
+        #'.bac',
+        #'.back',
+        #'.bck',
+        #'.bk',
+        #'.bkp',
+        #'.default',
+        #'.ear',
+        #'.lz',
+        #'.lzma',
+        #'.nsx',
+        #'.old',
+        #'.old~',
+        #'.org',
+        #'.orig',
+        #'.orig~',
+        #'.original',
+        #'.rollback',
+        #'.temp',
+        #'.temp~',
+        #'.tgz~',
+        #'~',
+        #'~~',
+        #'.bkp~',
     ]
     return [site + file_path + prefix + p for p in patterns]
 
@@ -1273,6 +1267,8 @@ def generate_bfa_urls(url,
         full_path + domain + 'i18n_pt_BR.properties',
         full_path + domain + '.pyenv',
         full_path + domain + '__init__.py',
+        
+        full_path + 'old.index.html',
         
         full_path + domain,
         full_path + subdomain,
